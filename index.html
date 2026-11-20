@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1c1b19" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Подсказчик">
+  <meta name="description" content="Шахматный подсказчик на Stockfish 19: вводите ходы соперника, бот отвечает лучшим ходом.">
+  <title>Шахматный подсказчик</title>
+  <link rel="icon" href="pieces/wN.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="pieces/wN.svg">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Шахматный подсказчик</h1>
+    <span id="engine-badge" class="badge">Stockfish загружается…</span>
+  </header>
+
+  <div id="engine-error" class="error" role="alert" hidden></div>
+
+  <main class="layout">
+    <section class="board-col">
+      <div class="side-label" id="label-top">Соперник</div>
+      <div class="board-wrap">
+        <div class="evalbar" id="evalbar" aria-hidden="true">
+          <div class="evalbar-fill" id="evalbar-fill"></div>
+          <div class="evalbar-mid"></div>
+        </div>
+        <svg id="board" class="board" role="img" aria-label="Шахматная доска"><defs>
+          <radialGradient id="check-grad"><stop offset="0%" stop-color="#ff0000" stop-opacity="1"/><stop offset="25%" stop-color="#e70000" stop-opacity="1"/><stop offset="89%" stop-color="#a90000" stop-opacity="0"/><stop offset="100%" stop-color="#9e0000" stop-opacity="0"/></radialGradient>
+        </defs></svg>
+      </div>
+      <div class="side-label bot" id="label-bottom">Бот (Stockfish 19)</div>
+    </section>
+
+    <section class="panel">
+      <div id="status" class="status" aria-live="polite">Загрузка…</div>
+
+      <div class="card best" id="best-card">
+        <div class="best-head">
+          <span id="best-title">Лучший ход</span>
+          <span class="eval-text"><b id="eval-text">—</b> <span id="depth-text"></span></span>
+        </div>
+        <div class="best-move" id="best-move">—</div>
+        <ol class="lines" id="lines"></ol>
+        <button id="btn-play-best" class="btn primary wide" hidden>Сыграть лучший ход</button>
+      </div>
+
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Режим">
+          <button data-mode="auto">Бот ходит сам</button>
+          <button data-mode="hint">Только подсказка</button>
+        </div>
+        <div class="row">
+          <span class="row-label">Время на ход</span>
+          <div class="seg small" role="group" aria-label="Время на ход">
+            <button data-time="500">0,5 с</button>
+            <button data-time="1000">1 с</button>
+            <button data-time="2000">2 с</button>
+            <button data-time="5000">5 с</button>
+          </div>
+        </div>
+        <div class="buttons">
+          <button id="btn-undo" class="btn">↶ Отменить ход</button>
+          <button id="btn-new" class="btn">Новая партия</button>
+          <button id="btn-pgn" class="btn">Копировать PGN</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="moves-head">
+          <span>Ходы</span>
+          <span class="legend"><span class="bot-chip">ход</span> — ход бота</span>
+        </div>
+        <ol class="moves" id="moves"></ol>
+      </div>
+
+      <footer class="foot">
+        Движок <a href="https://github.com/official-stockfish/Stockfish">Stockfish 19</a>
+        (<a href="https://github.com/nmrugg/stockfish.js">stockfish.js</a>, GPLv3),
+        правила — <a href="https://github.com/jhlywa/chess.js">chess.js</a> (BSD-2),
+        фигуры Cburnett — <a href="https://creativecommons.org/licenses/by-sa/3.0/">CC BY-SA 3.0</a>.
+        Подробнее в <a href="https://github.com/finchproffe/chesscom#readme">README</a>.
+      </footer>
+    </section>
+  </main>
+
+  <!-- Выбор, кто ходит первым -->
+  <dialog id="dlg-new" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Кто ходит первым?</h2>
+      <button type="button" class="btn primary big" data-first="bot">
+        Бот ходит первым
+        <small>Бот — белые, внизу</small>
+      </button>
+      <button type="button" class="btn big" data-first="opp">
+        Я хожу первым (соперник)
+        <small>Соперник — белые сверху, бот — чёрные внизу</small>
+      </button>
+      <details class="fen-box">
+        <summary>Начать с позиции (FEN)</summary>
+        <label for="fen-input">FEN</label>
+        <textarea id="fen-input" rows="2" spellcheck="false" autocapitalize="off" autocomplete="off"
+          placeholder="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"></textarea>
+        <div class="row">
+          <span class="row-label">Бот играет</span>
+          <div class="seg small" role="group" aria-label="Цвет бота">
+            <button type="button" data-fen-color="w" class="on">белыми</button>
+            <button type="button" data-fen-color="b">чёрными</button>
+          </div>
+        </div>
+        <div id="fen-error" class="fen-error" hidden></div>
+        <button type="button" id="btn-fen" class="btn wide">Загрузить позицию</button>
+      </details>
+      <button type="button" id="btn-new-cancel" class="btn ghost wide">Отмена</button>
+    </form>
+  </dialog>
+
+  <!-- Превращение пешки -->
+  <dialog id="dlg-promo" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2>Превращение пешки</h2>
+      <div class="promo" id="promo-choices"></div>
+      <button type="button" class="btn ghost wide" data-promo="">Отмена</button>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
