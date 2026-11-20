@@ -122,6 +122,24 @@ function sqCenter(box, sq, orient) {
   await page.click('#btn-undo');
   console.log('undo (auto) moves now:', await page.evaluate(() => window.chessAdvisor.state.moves.join(' ')), 'turn', await page.evaluate(() => window.chessAdvisor.game.turn()));
 
+  // 3b) «Соперник отменил ход»: ход соперника и ответ бота убираются, соперник пропускает ход, ходит бот
+  [a, b] = sqCenter(box, 'e7', 'w'); [c, d] = sqCenter(box, 'e5', 'w');
+  await page.mouse.click(a, b); await page.mouse.click(c, d);
+  await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 3, null, { timeout: 15000 });
+  await page.click('#btn-opp-takeback');
+  await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 3 && window.chessAdvisor.state.moves[1] === '--', null, { timeout: 15000 });
+  const tb = await page.evaluate(() => ({
+    moves: window.chessAdvisor.state.moves.join(' '),
+    turn: window.chessAdvisor.game.turn(),
+    list: document.getElementById('moves').textContent,
+    disabled: document.getElementById('btn-opp-takeback').disabled,
+  }));
+  console.log('opp takeback:', JSON.stringify(tb));
+  if (tb.turn !== 'b' || !tb.list.includes('пропуск')) throw new Error('opp takeback failed');
+  await page.screenshot({ path: OUT + '/05b-opp-takeback.png', fullPage: true });
+  await page.click('#btn-undo'); // откатывает ответ бота и пропуск — снова ход соперника после 1.e4
+  console.log('undo after takeback:', await page.evaluate(() => window.chessAdvisor.state.moves.join(' ')));
+
   // 4) режим подсказки
   await page.click('[data-mode="hint"]');
   [a, b] = sqCenter(box, 'd7', 'w'); [c, d] = sqCenter(box, 'd5', 'w');
@@ -141,6 +159,8 @@ function sqCenter(box, sq, orient) {
   // сейчас ход бота (после undo в hint) — пусть думает; отменим ход соперника и сделаем другой
   await page.waitForTimeout(300);
   await page.click('#btn-undo'); // откатывает d7d5 (ход соперника)
+  await page.evaluate(() => window.scrollTo(0, 0)); // доска могла уехать за верх экрана
+  box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'c7', 'w'); [c, d] = sqCenter(box, 'c5', 'w');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 3 && window.chessAdvisor.game.turn() === "b", null, { timeout: 15000 });

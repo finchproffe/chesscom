@@ -60,6 +60,7 @@ function load() {
 const RU = { K: 'Кр', Q: 'Ф', R: 'Л', B: 'С', N: 'К' };
 
 function sanRu(san) {
+  if (san === PASS) return 'пропуск';
   return san
     .replace(/^O-O-O/, '0-0-0')
     .replace(/^O-O/, '0-0')
@@ -81,6 +82,13 @@ function uciToMove(uci) {
   return { from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || undefined };
 }
 
+/** Пропуск хода соперника (он сходил и отменил ход) хранится как '--'. */
+const PASS = '--';
+
+function applyUci(g, uci) {
+  return uci === PASS ? g.move(null) : g.move(uciToMove(uci));
+}
+
 function colorName(c, gen = false) {
   if (gen) return c === 'w' ? 'белых' : 'чёрных';
   return c === 'w' ? 'белые' : 'чёрные';
@@ -95,7 +103,7 @@ function rebuild() {
   const ok = [];
   for (const uci of state.moves) {
     let m = null;
-    try { m = game.move(uciToMove(uci)); } catch (_) { m = null; }
+    try { m = applyUci(game, uci); } catch (_) { m = null; }
     if (!m) break;
     ok.push(uci);
     history.push(m);
@@ -282,7 +290,7 @@ function renderBoard() {
   board.set({
     pieces: piecesMap(),
     orientation: state.botColor,
-    lastMove: last ? [last.from, last.to] : null,
+    lastMove: last && last.san !== PASS ? [last.from, last.to] : null,
     check: game.inCheck() ? kingSquare(game.turn()) : null,
     dests: movableDests(),
     arrows: arrowsNow(),
@@ -464,6 +472,7 @@ function renderControls() {
   document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
   document.querySelectorAll('[data-time]').forEach((b) => b.classList.toggle('on', +b.dataset.time === state.movetime));
   $('btn-undo').disabled = !state.moves.length;
+  $('btn-opp-takeback').disabled = oppTakebackIndex() < 0;
   $('label-top').textContent = `Соперник · ${colorName(state.botColor === 'w' ? 'b' : 'w')}`;
   $('label-bottom').textContent = `Бот (Stockfish 19) · ${colorName(state.botColor)}`;
 }
@@ -521,6 +530,36 @@ $('btn-undo').addEventListener('click', () => {
   afterChange();
 });
 
+/** Индекс последнего настоящего хода соперника (после него — только ходы бота) или -1. */
+function oppTakebackIndex() {
+  if (!state.started) return -1;
+  let i = history.length - 1;
+  while (i >= 0 && history[i].color === state.botColor) i--;
+  if (i < 0 || history[i].san === PASS) return -1;
+  return i;
+}
+
+// Соперник сходил и сразу отменил ход: убираем его ход (и ответ бота, если был),
+// соперник пропускает ход — следующим ходит бот.
+$('btn-opp-takeback').addEventListener('click', () => {
+  const i = oppTakebackIndex();
+  if (i < 0) return;
+  const probe = new Chess(state.startFen);
+  for (const uci of state.moves.slice(0, i)) applyUci(probe, uci);
+  if (probe.inCheck()) {
+    toast('Соперник под шахом — пропустить ход нельзя. Используйте «Отменить ход».');
+    return;
+  }
+  engine?.cancel();
+  state.moves = state.moves.slice(0, i);
+  state.moves.push(PASS);
+  rebuild();
+  save();
+  board.clearSelection();
+  toast('Ход соперника отменён — ходит бот');
+  afterChange();
+});
+
 $('btn-pgn').addEventListener('click', async () => {
   const pgn = buildPgn();
   try {
@@ -545,7 +584,7 @@ $('btn-pgn').addEventListener('click', async () => {
 
 function buildPgn() {
   const g = new Chess(state.startFen);
-  for (const uci of state.moves) g.move(uciToMove(uci));
+  for (const uci of state.moves) applyUci(g, uci);
   const d = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const bot = 'Stockfish 19 (бот)';
