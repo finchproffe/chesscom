@@ -251,6 +251,46 @@ function sqCenter(box, sq, orient) {
   await playGame('bot', false);
   console.log('monster lines on screen:', await page.evaluate(() => document.querySelectorAll('#lines li').length));
 
+  // 7d) детский мат белыми и чёрными
+  async function oppMove(uci, orient) {
+    const n = await page.evaluate(() => window.chessAdvisor.state.moves.length);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const bx = await page.locator('#board').boundingBox();
+    let [x, y] = sqCenter(bx, uci.slice(0, 2), orient); await page.mouse.click(x, y);
+    [x, y] = sqCenter(bx, uci.slice(2, 4), orient); await page.mouse.click(x, y);
+    await page.waitForFunction((k) => {
+      const ca = window.chessAdvisor;
+      return ca.state.moves.length >= k + 2 || ca.game.isGameOver();
+    }, n, { timeout: 15000 });
+  }
+  await page.click('[data-strength="max"]');
+  await page.click('[data-scholar="on"]');
+  await page.click('#btn-new');
+  await page.click('[data-first="bot"]');
+  await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 1, null, { timeout: 15000 });
+  for (const mv of ['e7e5', 'b8c6', 'g8f6']) await oppMove(mv, 'w');
+  await page.waitForFunction(() => window.chessAdvisor.game.isGameOver(), null, { timeout: 15000 });
+  const sw1 = await page.evaluate(() => ({ moves: window.chessAdvisor.state.moves.join(' '), mate: window.chessAdvisor.game.isCheckmate() }));
+  console.log('scholar white:', JSON.stringify(sw1));
+  if (sw1.moves !== 'e2e4 e7e5 f1c4 b8c6 d1h5 g8f6 h5f7' || !sw1.mate) throw new Error('scholar white failed');
+
+  await page.click('#btn-new');
+  await page.click('[data-first="opp"]');
+  for (const mv of ['e2e4', 'a2a3', 'h2h3', 'a3a4']) await oppMove(mv, 'b');
+  await page.waitForFunction(() => window.chessAdvisor.game.isGameOver(), null, { timeout: 15000 });
+  const sb1 = await page.evaluate(() => ({ moves: window.chessAdvisor.state.moves.join(' '), mate: window.chessAdvisor.game.isCheckmate() }));
+  console.log('scholar black:', JSON.stringify(sb1));
+  if (sb1.moves !== 'e2e4 e7e5 a2a3 f8c5 h2h3 d8h4 a3a4 h4f2' || !sb1.mate) throw new Error('scholar black failed');
+
+  // соперник защищается (Фe7) — план бросается, дальше играет движок
+  await page.click('#btn-new');
+  await page.click('[data-first="bot"]');
+  await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 1, null, { timeout: 15000 });
+  for (const mv of ['e7e5', 'b8c6', 'g7g6']) await oppMove(mv, 'w');
+  const sd = await page.evaluate(() => window.chessAdvisor.state.moves.join(' '));
+  console.log('scholar defended:', sd);
+  await page.click('[data-scholar="off"]');
+
   // 8) ширина 390
   const sw = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, board: document.getElementById('board').getBoundingClientRect().width }));
   console.log('layout 390:', JSON.stringify(sw));

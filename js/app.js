@@ -28,6 +28,7 @@ const state = {
   mode: 'auto',       // 'auto' | 'hint'
   movetime: 2000,
   strength: 'max',    // ключ STRENGTHS
+  scholar: false,     // пытаться поставить детский мат
   started: false,
 };
 
@@ -64,6 +65,7 @@ function load() {
       if (s.mode === 'auto' || s.mode === 'hint') state.mode = s.mode;
       if (TIMES.includes(s.movetime)) state.movetime = s.movetime;
       if (s.strength in STRENGTHS) state.strength = s.strength;
+      state.scholar = !!s.scholar;
       state.started = !!s.started;
     }
   } catch (_) { /* испорченные данные — начинаем заново */ }
@@ -180,8 +182,64 @@ function startPonder() {
   engine.search(game.fen(), 0, () => {}, () => {}, { multiPv: 1 });
 }
 
+// ---------------------------------------------------------------------------
+// Детский мат: e4 → Сc4 → Фh5 (или Фf3) → Ф:f7#. Если соперник защитился или
+// ход по плану опасен — дальше играет движок.
+// ---------------------------------------------------------------------------
+const SCHOLAR = {
+  w: { pawn: 'e2e4', bishop: 'f1c4', bishopSq: 'c4', queens: ['d1h5', 'd1f3'] },
+  b: { pawn: 'e7e5', bishop: 'f8c5', bishopSq: 'c5', queens: ['d8h4', 'd8f6'] },
+};
+const SCHOLAR_MAX_BOT_MOVES = 6;
+
+function scholarMove() {
+  if (!state.scholar || game.inCheck()) return null;
+  const me = state.botColor;
+  const them = me === 'w' ? 'b' : 'w';
+  if (history.filter((m) => m.color === me && m.san !== PASS).length >= SCHOLAR_MAX_BOT_MOVES) return null;
+  const legal = game.moves({ verbose: true });
+  // мат в один ход — ставим сразу (это и есть Ф:f7#)
+  const mate = legal.find((m) => m.san.endsWith('#'));
+  if (mate) return mate.from + mate.to + (mate.promotion || '');
+  const plan = SCHOLAR[me];
+  const safe = (uci) => {
+    const m = legal.find((x) => x.from + x.to === uci);
+    if (!m) return false;
+    const g = new Chess(game.fen());
+    g.move(m);
+    return !g.isAttacked(m.to, them);
+  };
+  const at = (sq) => game.get(sq) || null;
+  const pawnSq = plan.pawn.slice(0, 2);
+  if (at(pawnSq)?.type === 'p' && at(pawnSq).color === me) {
+    return legal.some((x) => x.from + x.to === plan.pawn) ? plan.pawn : null;
+  }
+  const bishopHome = plan.bishop.slice(0, 2);
+  if (at(bishopHome)?.type === 'b' && at(bishopHome).color === me) {
+    return safe(plan.bishop) ? plan.bishop : null;
+  }
+  const b = at(plan.bishopSq);
+  if (!(b?.type === 'b' && b.color === me)) return null;
+  const qHome = plan.queens[0].slice(0, 2);
+  if (at(qHome)?.type === 'q' && at(qHome).color === me) {
+    return plan.queens.find(safe) || null;
+  }
+  return null;
+}
+
 function startSearch() {
   const fen = game.fen();
+  const plan = scholarMove();
+  if (plan) {
+    analysis = { fen, lines: [], depth: 0, best: plan, final: true, scholar: true };
+    render();
+    if (state.mode === 'auto') {
+      setTimeout(() => {
+        if (analysis?.fen === fen && game.fen() === fen && analysis.best === plan) playMove(plan);
+      }, 400);
+    }
+    return;
+  }
   analysis = { fen, lines: [], depth: 0, best: null, final: false };
   render();
   if (!engine || engineFailed) return;
@@ -422,7 +480,7 @@ function renderAnalysis() {
 
   if (analysis && isBotTurn()) {
     const mv = analysis.best ? moveFromUci(analysis.fen, analysis.best) : null;
-    title.textContent = !analysis.final ? 'Бот думает…' : STRENGTHS[state.strength]?.pBest >= 1 ? 'Лучший ход' : 'Ход бота';
+    title.textContent = analysis.scholar ? 'Детский мат — по плану' : !analysis.final ? 'Бот думает…' : STRENGTHS[state.strength]?.pBest >= 1 ? 'Лучший ход' : 'Ход бота';
     big.textContent = mv ? longRu(mv) : '…';
     big.classList.toggle('thinking', !analysis.final);
     for (const line of analysis.lines.slice(0, 3)) {
@@ -520,6 +578,7 @@ function renderControls() {
   document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
   document.querySelectorAll('[data-time]').forEach((b) => b.classList.toggle('on', +b.dataset.time === state.movetime));
   document.querySelectorAll('[data-strength]').forEach((b) => b.classList.toggle('on', b.dataset.strength === state.strength));
+  document.querySelectorAll('[data-scholar]').forEach((b) => b.classList.toggle('on', (b.dataset.scholar === 'on') === state.scholar));
   $('btn-undo').disabled = !state.moves.length;
   $('btn-opp-takeback').disabled = oppTakebackIndex() < 0;
   $('label-top').textContent = `Соперник · ${colorName(state.botColor === 'w' ? 'b' : 'w')}`;
@@ -564,6 +623,16 @@ document.querySelectorAll('[data-strength]').forEach((b) => b.addEventListener('
     engine?.cancel();
     startPonder();
   }
+}));
+
+document.querySelectorAll('[data-scholar]').forEach((b) => b.addEventListener('click', () => {
+  const on = b.dataset.scholar === 'on';
+  if (state.scholar === on) return;
+  state.scholar = on;
+  save();
+  // включили на ходу бота — пересчитать ход с учётом плана
+  if (isBotTurn() && !game.isGameOver()) afterChange();
+  else renderControls();
 }));
 
 $('btn-play-best').addEventListener('click', () => {
