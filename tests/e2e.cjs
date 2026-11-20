@@ -235,6 +235,22 @@ function sqCenter(box, sq, orient) {
   await page.evaluate(() => window.scrollTo(0, 0));
   await playGame('bot', false);
 
+  // 7c) «Монстр»: один вариант, обдумывание на ходу соперника
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.click('#btn-new');
+  await page.click('[data-first="bot"]');
+  await page.click('[data-strength="monster"]');
+  await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 1, null, { timeout: 15000 });
+  await page.waitForTimeout(300);
+  const ponder = await page.evaluate(() => {
+    const e = window.chessAdvisor.engine;
+    return { searching: e.searching, infinite: e.job?.movetime === 0, multiPv: e.job?.multiPv };
+  });
+  console.log('monster ponder:', JSON.stringify(ponder));
+  if (!ponder.searching || !ponder.infinite || ponder.multiPv !== 1) throw new Error('monster ponder failed');
+  await playGame('bot', false);
+  console.log('monster lines on screen:', await page.evaluate(() => document.querySelectorAll('#lines li').length));
+
   // 8) ширина 390
   const sw = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, board: document.getElementById('board').getBoundingClientRect().width }));
   console.log('layout 390:', JSON.stringify(sw));

@@ -6,8 +6,10 @@
 const INIT_TIMEOUT_MS = 15000;
 
 export class Engine {
-  constructor(url, { multiPv = 3, onReady, onError } = {}) {
+  constructor(url, { multiPv = 3, hash = 0, onReady, onError } = {}) {
     this.multiPv = multiPv;
+    this.curMultiPv = multiPv;
+    this.hash = hash;
     this.onReady = onReady || (() => {});
     this.onError = onError || (() => {});
     this.ready = false;
@@ -57,6 +59,7 @@ export class Engine {
       this.name = line.slice(8);
     } else if (line === 'uciok') {
       this._post('setoption name MultiPV value ' + this.multiPv);
+      if (this.hash) this._post('setoption name Hash value ' + this.hash);
       this._post('isready');
     } else if (line === 'readyok') {
       if (!this.ready) {
@@ -111,13 +114,22 @@ export class Engine {
     const job = this.pending;
     this.pending = null;
     this.job = job;
+    // движок сейчас свободен (предыдущий bestmove получен) — опции менять можно
+    if (job.multiPv !== this.curMultiPv) {
+      this.curMultiPv = job.multiPv;
+      this._post('setoption name MultiPV value ' + job.multiPv);
+    }
     this._post('position fen ' + job.fen);
-    this._post('go movetime ' + job.movetime);
+    // movetime = 0 — бесконечный поиск до stop (обдумывание на времени соперника)
+    this._post(job.movetime ? 'go movetime ' + job.movetime : 'go infinite');
   }
 
-  /** Запускает поиск. onInfo(lines, job), onDone(bestUci, job). */
-  search(fen, movetime, onInfo, onDone) {
-    const job = { fen, movetime, onInfo, onDone, lines: [], depth: 0, stopped: false };
+  /**
+   * Запускает поиск. onInfo(lines, job), onDone(bestUci, job).
+   * movetime = 0 — бесконечный поиск, закончить его можно только cancel().
+   */
+  search(fen, movetime, onInfo, onDone, { multiPv = this.multiPv } = {}) {
+    const job = { fen, movetime, onInfo, onDone, multiPv, lines: [], depth: 0, stopped: false };
     this.pending = job;
     if (this.job) this._stopCurrent();
     else this._next();

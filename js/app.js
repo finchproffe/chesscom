@@ -12,7 +12,10 @@ const TIMES = [500, 1000, 2000, 5000];
 // следующих вариантов MultiPV, если он теряет не больше maxDrop процентных пунктов
 // шанса на победу (та же шкала, что у «точности» в разборах партий).
 // Грубых зевков бот не делает; мат в N ходов не упускает.
+// «Монстр» — полная сила: один вариант вместо четырёх (весь поиск уходит в лучший ход)
+// и обдумывание на времени соперника (кэш движка уже заполнен, когда тот сходит).
 const STRENGTHS = {
+  monster: { pBest: 1, maxDrop: 0, multiPv: 1, ponder: true },
   max:   { pBest: 1,    maxDrop: 0 },
   human: { pBest: 0.55, maxDrop: 7 },   // ≈ 88–92 % точности
   weak:  { pBest: 0.35, maxDrop: 14 },  // ≈ 78–85 % точности
@@ -166,6 +169,15 @@ function afterChange() {
   render();
   if (!state.started || game.isGameOver()) return;
   if (isBotTurn()) startSearch();
+  else startPonder();
+}
+
+/** «Монстр»: пока соперник думает, движок анализирует позицию (go infinite). */
+function startPonder() {
+  const cfg = STRENGTHS[state.strength];
+  if (!cfg?.ponder || !engine || engineFailed) return;
+  if (!state.started || game.isGameOver() || isBotTurn()) return;
+  engine.search(game.fen(), 0, () => {}, () => {}, { multiPv: 1 });
 }
 
 function startSearch() {
@@ -173,6 +185,7 @@ function startSearch() {
   analysis = { fen, lines: [], depth: 0, best: null, final: false };
   render();
   if (!engine || engineFailed) return;
+  const cfg = STRENGTHS[state.strength] || STRENGTHS.max;
   engine.search(
     fen,
     state.movetime,
@@ -195,6 +208,7 @@ function startSearch() {
         render();
       }
     },
+    { multiPv: cfg.multiPv || 4 },
   );
 }
 
@@ -408,7 +422,7 @@ function renderAnalysis() {
 
   if (analysis && isBotTurn()) {
     const mv = analysis.best ? moveFromUci(analysis.fen, analysis.best) : null;
-    title.textContent = !analysis.final ? 'Бот думает…' : state.strength === 'max' ? 'Лучший ход' : 'Ход бота';
+    title.textContent = !analysis.final ? 'Бот думает…' : STRENGTHS[state.strength]?.pBest >= 1 ? 'Лучший ход' : 'Ход бота';
     big.textContent = mv ? longRu(mv) : '…';
     big.classList.toggle('thinking', !analysis.final);
     for (const line of analysis.lines.slice(0, 3)) {
@@ -541,9 +555,15 @@ document.querySelectorAll('[data-time]').forEach((b) => b.addEventListener('clic
 }));
 
 document.querySelectorAll('[data-strength]').forEach((b) => b.addEventListener('click', () => {
+  if (state.strength === b.dataset.strength) return;
   state.strength = b.dataset.strength;
   save();
   renderControls();
+  // включили/выключили «Монстра» на ходу соперника — запускаем или гасим обдумывание
+  if (state.started && !isBotTurn() && !game.isGameOver()) {
+    engine?.cancel();
+    startPonder();
+  }
 }));
 
 $('btn-play-best').addEventListener('click', () => {
@@ -732,6 +752,7 @@ document.addEventListener('pointerdown', () => { if (state.started) requestWakeL
 // ---------------------------------------------------------------------------
 const engine = new Engine('engine/stockfish-19-lite-single.js', {
   multiPv: 4,
+  hash: 64,
   onReady(name) {
     engineReady = true;
     $('engine-badge').textContent = name || 'Stockfish 19';
@@ -779,5 +800,6 @@ window.chessAdvisor = {
   get analysis() { return analysis; },
   get engineReady() { return engineReady; },
   get engineFailed() { return engineFailed; },
+  get engine() { return engine; },
   chooseMove,
 };
