@@ -8,12 +8,23 @@ import { Board, loadPieceSymbols } from './board.js';
 const LS_KEY = 'chess-advisor:v1';
 const TIMES = [500, 1000, 2000, 5000];
 
+// Сила игры бота. «Как человек» и «Слабее» иногда играют не лучший ход, а один из
+// следующих вариантов MultiPV, если он теряет не больше maxDrop процентных пунктов
+// шанса на победу (та же шкала, что у «точности» в разборах партий).
+// Грубых зевков бот не делает; мат в N ходов не упускает.
+const STRENGTHS = {
+  max:   { pBest: 1,    maxDrop: 0 },
+  human: { pBest: 0.55, maxDrop: 7 },   // ≈ 88–92 % точности
+  weak:  { pBest: 0.35, maxDrop: 14 },  // ≈ 78–85 % точности
+};
+
 const state = {
   startFen: DEFAULT_POSITION,
   moves: [],          // ходы в UCI (e2e4, e7e8q)
   botColor: 'w',      // бот всегда снизу
   mode: 'auto',       // 'auto' | 'hint'
   movetime: 2000,
+  strength: 'max',    // ключ STRENGTHS
   started: false,
 };
 
@@ -49,6 +60,7 @@ function load() {
       if (s.botColor === 'w' || s.botColor === 'b') state.botColor = s.botColor;
       if (s.mode === 'auto' || s.mode === 'hint') state.mode = s.mode;
       if (TIMES.includes(s.movetime)) state.movetime = s.movetime;
+      if (s.strength in STRENGTHS) state.strength = s.strength;
       state.started = !!s.started;
     }
   } catch (_) { /* испорченные данные — начинаем заново */ }
@@ -175,7 +187,7 @@ function startSearch() {
     (best) => {
       // устаревший bestmove (позиция уже другая) — игнорируем
       if (!analysis || analysis.fen !== fen || game.fen() !== fen) return;
-      analysis.best = best || analysis.best;
+      analysis.best = chooseMove(analysis.lines, best || analysis.best);
       analysis.final = true;
       if (state.mode === 'auto' && analysis.best) {
         playMove(analysis.best);
@@ -184,6 +196,28 @@ function startSearch() {
       }
     },
   );
+}
+
+/** Шанс на победу (0–100) стороны, которая ходит, по оценке варианта. */
+function winPct(line) {
+  if (line.mate != null) return line.mate > 0 ? 100 : 0;
+  return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * line.cp)) - 1);
+}
+
+/** Выбор хода с учётом силы: иногда — не лучший, но без грубых ошибок. */
+function chooseMove(lines, best) {
+  const cfg = STRENGTHS[state.strength] || STRENGTHS.max;
+  const top = lines.find((l) => l.multipv === 1);
+  if (cfg.pBest >= 1 || !top || lines.length < 2) return best;
+  if (Math.random() < cfg.pBest) return best;
+  const topWin = winPct(top);
+  const alts = lines.filter((l) => {
+    if (l.multipv === 1 || !l.pv?.length) return false;
+    if (top.mate != null && top.mate > 0 && !(l.mate != null && l.mate > 0)) return false; // мат не упускаем
+    return topWin - winPct(l) <= cfg.maxDrop;
+  });
+  if (!alts.length) return best;
+  return alts[Math.floor(Math.random() * alts.length)].pv[0];
 }
 
 function updateEval(line, depth, fen) {
@@ -374,10 +408,10 @@ function renderAnalysis() {
 
   if (analysis && isBotTurn()) {
     const mv = analysis.best ? moveFromUci(analysis.fen, analysis.best) : null;
-    title.textContent = analysis.final ? 'Лучший ход' : 'Бот думает…';
+    title.textContent = !analysis.final ? 'Бот думает…' : state.strength === 'max' ? 'Лучший ход' : 'Ход бота';
     big.textContent = mv ? longRu(mv) : '…';
     big.classList.toggle('thinking', !analysis.final);
-    for (const line of analysis.lines) {
+    for (const line of analysis.lines.slice(0, 3)) {
       const li = document.createElement('li');
       li.innerHTML = `<b></b><span></span>`;
       li.firstChild.textContent = lineEvalText(line, analysis.fen);
@@ -471,6 +505,7 @@ function renderMoves() {
 function renderControls() {
   document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === state.mode));
   document.querySelectorAll('[data-time]').forEach((b) => b.classList.toggle('on', +b.dataset.time === state.movetime));
+  document.querySelectorAll('[data-strength]').forEach((b) => b.classList.toggle('on', b.dataset.strength === state.strength));
   $('btn-undo').disabled = !state.moves.length;
   $('btn-opp-takeback').disabled = oppTakebackIndex() < 0;
   $('label-top').textContent = `Соперник · ${colorName(state.botColor === 'w' ? 'b' : 'w')}`;
@@ -501,6 +536,12 @@ document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('clic
 
 document.querySelectorAll('[data-time]').forEach((b) => b.addEventListener('click', () => {
   state.movetime = +b.dataset.time;
+  save();
+  renderControls();
+}));
+
+document.querySelectorAll('[data-strength]').forEach((b) => b.addEventListener('click', () => {
+  state.strength = b.dataset.strength;
   save();
   renderControls();
 }));
@@ -690,7 +731,7 @@ document.addEventListener('pointerdown', () => { if (state.started) requestWakeL
 // Движок
 // ---------------------------------------------------------------------------
 const engine = new Engine('engine/stockfish-19-lite-single.js', {
-  multiPv: 3,
+  multiPv: 4,
   onReady(name) {
     engineReady = true;
     $('engine-badge').textContent = name || 'Stockfish 19';
@@ -738,4 +779,5 @@ window.chessAdvisor = {
   get analysis() { return analysis; },
   get engineReady() { return engineReady; },
   get engineFailed() { return engineFailed; },
+  chooseMove,
 };

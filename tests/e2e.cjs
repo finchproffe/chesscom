@@ -52,6 +52,7 @@ function sqCenter(box, sq, orient) {
       const caps = info.moves.filter((m) => m.captured);
       const pool = caps.length && Math.random() < 0.5 ? caps : info.moves;
       const mv = pool[Math.floor(Math.random() * pool.length)];
+      await page.evaluate(() => window.scrollTo(0, 0));
       const box = await page.locator('#board').boundingBox();
       const orient = botColor;
       const [fx, fy] = sqCenter(box, mv.from, orient);
@@ -114,6 +115,7 @@ function sqCenter(box, sq, orient) {
   await page.click('#btn-new');
   await page.click('[data-first="bot"]');
   await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 1, null, { timeout: 15000 });
+  await page.evaluate(() => window.scrollTo(0, 0));
   let box = await page.locator('#board').boundingBox();
   let [a, b] = sqCenter(box, 'e7', 'w'); let [c, d] = sqCenter(box, 'e5', 'w');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
@@ -123,6 +125,7 @@ function sqCenter(box, sq, orient) {
   console.log('undo (auto) moves now:', await page.evaluate(() => window.chessAdvisor.state.moves.join(' ')), 'turn', await page.evaluate(() => window.chessAdvisor.game.turn()));
 
   // 3b) «Соперник отменил ход»: ход соперника и ответ бота убираются, соперник пропускает ход, ходит бот
+  await page.evaluate(() => window.scrollTo(0, 0)); box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'e7', 'w'); [c, d] = sqCenter(box, 'e5', 'w');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 3, null, { timeout: 15000 });
@@ -142,6 +145,7 @@ function sqCenter(box, sq, orient) {
 
   // 4) режим подсказки
   await page.click('[data-mode="hint"]');
+  await page.evaluate(() => window.scrollTo(0, 0)); box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'd7', 'w'); [c, d] = sqCenter(box, 'd5', 'w');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForFunction(() => window.chessAdvisor.analysis?.final, null, { timeout: 15000 });
@@ -161,6 +165,7 @@ function sqCenter(box, sq, orient) {
   await page.click('#btn-undo'); // откатывает d7d5 (ход соперника)
   await page.evaluate(() => window.scrollTo(0, 0)); // доска могла уехать за верх экрана
   box = await page.locator('#board').boundingBox();
+  await page.evaluate(() => window.scrollTo(0, 0)); box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'c7', 'w'); [c, d] = sqCenter(box, 'c5', 'w');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 3 && window.chessAdvisor.game.turn() === "b", null, { timeout: 15000 });
@@ -175,6 +180,7 @@ function sqCenter(box, sq, orient) {
   await page.click('[data-fen-color="b"]');
   await page.click('#btn-fen');
   box = await page.locator('#board').boundingBox();
+  await page.evaluate(() => window.scrollTo(0, 0)); box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'b7', 'b'); [c, d] = sqCenter(box, 'b8', 'b');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForSelector('#dlg-promo[open]');
@@ -187,6 +193,7 @@ function sqCenter(box, sq, orient) {
   await page.fill('#fen-input', '8/8/8/8/8/6k1/1p6/4K3 w - - 0 1');
   await page.click('[data-fen-color="b"]');
   await page.click('#btn-fen');
+  await page.evaluate(() => window.scrollTo(0, 0)); box = await page.locator('#board').boundingBox();
   [a, b] = sqCenter(box, 'e1', 'b'); [c, d] = sqCenter(box, 'd2', 'b');
   await page.mouse.click(a, b); await page.mouse.click(c, d);
   await page.waitForFunction(() => window.chessAdvisor.state.moves.length === 2, null, { timeout: 15000 });
@@ -206,6 +213,27 @@ function sqCenter(box, sq, orient) {
   await page.waitForFunction(() => window.chessAdvisor?.engineReady, null, { timeout: 20000 });
   const afterReload = await page.evaluate(() => JSON.stringify(window.chessAdvisor.state));
   console.log('persisted:', beforeReload === afterReload, afterReload);
+
+  // 7b) сила бота: выбор хода среди вариантов
+  await page.click('[data-strength="human"]');
+  const pick = await page.evaluate(() => {
+    const ca = window.chessAdvisor;
+    const lines = [
+      { multipv: 1, cp: 40, mate: null, pv: ['e2e4'] },
+      { multipv: 2, cp: 25, mate: null, pv: ['d2d4'] },   // −15 cp — допустимо
+      { multipv: 3, cp: -150, mate: null, pv: ['g2g4'] }, // зевок — нельзя
+    ];
+    const cnt = {};
+    for (let i = 0; i < 2000; i++) { const m = ca.chooseMove(lines, 'e2e4'); cnt[m] = (cnt[m] || 0) + 1; }
+    const mate = [{ multipv: 1, mate: 2, cp: null, pv: ['h5f7'] }, { multipv: 2, cp: 300, mate: null, pv: ['a2a3'] }];
+    let mateKept = true;
+    for (let i = 0; i < 200; i++) if (ca.chooseMove(mate, 'h5f7') !== 'h5f7') mateKept = false;
+    return { cnt, mateKept, saved: ca.state.strength };
+  });
+  console.log('strength human pick:', JSON.stringify(pick));
+  if (pick.cnt.g2g4 || !pick.cnt.d2d4 || pick.cnt.e2e4 < 1000 || !pick.mateKept) throw new Error('strength pick failed');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await playGame('bot', false);
 
   // 8) ширина 390
   const sw = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth, board: document.getElementById('board').getBoundingClientRect().width }));
